@@ -32,7 +32,7 @@ from data import kraken_rest as api
 from features.pipeline import FeaturePipeline
 from model.transformer import PTETFE
 from model.esgd import ESGDModel
-from trading.signal import SignalGenerator
+from trading.signals import SignalGenerator
 from trading.risk import RiskManager
 from trading.executor import Executor
 from rl.state import StateBuilder

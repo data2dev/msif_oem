@@ -9,6 +9,12 @@ apt-get update -qq
 apt-get install -y -qq git python3 python3-pip python3-venv > /dev/null 2>&1
 logger -t $LOG_TAG "System packages installed"
 
+# ── Python venv (BEFORE cloning repo, to avoid name conflicts) ──
+if [ ! -d "/opt/kraken-env" ]; then
+    python3 -m venv /opt/kraken-env
+    logger -t $LOG_TAG "Python venv created"
+fi
+
 # ── Pull GitHub token from Secret Manager ──
 GITHUB_TOKEN=$(gcloud secrets versions access latest --secret=github-token)
 REPO_URL="https://${GITHUB_TOKEN}@github.com/data2dev/project_kraken.git"
@@ -26,10 +32,7 @@ else
 fi
 cd $REPO_DIR
 
-# ── Python environment ──
-if [ ! -d "/opt/kraken-env" ]; then
-    python3 -m venv /opt/kraken-env
-fi
+# ── Install Python dependencies ──
 source /opt/kraken-env/bin/activate
 pip install --upgrade pip -q
 pip install -r requirements.txt -q
