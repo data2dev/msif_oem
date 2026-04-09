@@ -170,6 +170,8 @@ class TradingEngine:
         # Stats
         self.bars_processed = 0
         self.signals_generated = 0
+        self.realized_pnl = 0.0
+        self.starting_equity = None
 
     def _load_models(self):
         ptetfe_path = os.path.join(self.model_dir, "ptetfe.pt")
@@ -331,6 +333,17 @@ class TradingEngine:
             self.outcome_tracker.check_timeouts(prices)
 
         if self.bars_processed % 5 == 0:
+            pnl = self._compute_pnl(prices)
+            if self.starting_equity is None and equity > 0:
+                self.starting_equity = equity
+            total_return = ((pnl["total"]) / self.starting_equity * 100) if self.starting_equity else 0
+
+            # Per-asset P&L string
+            asset_pnl = " | ".join(
+                f"{sym.split('/')[0]}:{d['pnl']:+.2f}({d['pnl_pct']:+.1f}%)"
+                for sym, d in pnl["per_asset"].items()
+            ) if pnl["per_asset"] else "no positions"
+
             stats = ""
             if self.use_rl and self.outcome_tracker:
                 os_stats = self.outcome_tracker.get_stats()
@@ -342,6 +355,12 @@ class TradingEngine:
                 f" | Pos={len(self.risk_mgr.positions)}"
                 f" | ESGD outliers={self.esgd.outlier_count}/{cfg.C_MAX}"
                 f"{stats}"
+            )
+            log.info(
+                f"  P&L: realized=${pnl['realized']:+.2f} "
+                f"unrealized=${pnl['unrealized']:+.2f} "
+                f"total=${pnl['total']:+.2f} ({total_return:+.2f}%) "
+                f"| {asset_pnl}"
             )
 
     def _rl_execution(self, signals, symbols, prices, spreads, equity,
@@ -395,6 +414,7 @@ class TradingEngine:
 
             if self.risk_mgr.check_stop_loss(ws_sym, current_price):
                 if current_pos:
+                    self._record_close_pnl(ws_sym, current_price)
                     self.executor.close_position(
                         rest_pair, ws_sym, current_pos["side"],
                         current_pos["size"], current_price
@@ -404,6 +424,7 @@ class TradingEngine:
 
             if target["side"] == "flat":
                 if current_pos:
+                    self._record_close_pnl(ws_sym, current_price)
                     self.executor.close_position(
                         rest_pair, ws_sym, current_pos["side"],
                         current_pos["size"], current_price
@@ -428,6 +449,7 @@ class TradingEngine:
                         self.signals_generated += 1
             else:
                 if target["side"] != current_pos["side"]:
+                    self._record_close_pnl(ws_sym, current_price)
                     self.executor.close_position(
                         rest_pair, ws_sym, current_pos["side"],
                         current_pos["size"], current_price
@@ -461,6 +483,7 @@ class TradingEngine:
             if self.risk_mgr.check_stop_loss(ws_sym, current_price):
                 pos = self.risk_mgr.get_position(ws_sym)
                 if pos:
+                    self._record_close_pnl(ws_sym, current_price)
                     self.executor.close_position(
                         rest_pair, ws_sym, pos["side"], pos["size"], current_price
                     )
@@ -521,6 +544,48 @@ class TradingEngine:
                 return rp
         return None
 
+    def _compute_pnl(self, prices: dict) -> dict:
+        """Compute unrealized P&L from open positions + track realized."""
+        unrealized = 0.0
+        per_asset = {}
+
+        for sym, pos in self.risk_mgr.positions.items():
+            price = prices.get(sym, 0)
+            if price <= 0:
+                continue
+            entry = pos["entry_price"]
+            size = pos["size"]
+            if pos["side"] == "long":
+                pnl = (price - entry) * size
+            else:
+                pnl = (entry - price) * size
+            pnl_pct = (pnl / (entry * size)) * 100 if entry * size > 0 else 0
+            unrealized += pnl
+            per_asset[sym] = {"pnl": pnl, "pnl_pct": pnl_pct, "side": pos["side"]}
+
+        total = self.realized_pnl + unrealized
+        return {
+            "unrealized": unrealized,
+            "realized": self.realized_pnl,
+            "total": total,
+            "per_asset": per_asset,
+        }
+
+    def _record_close_pnl(self, symbol: str, exit_price: float):
+        """Record realized P&L when a position is closed."""
+        pos = self.risk_mgr.get_position(symbol)
+        if not pos:
+            return
+        entry = pos["entry_price"]
+        size = pos["size"]
+        if pos["side"] == "long":
+            pnl = (exit_price - entry) * size
+        else:
+            pnl = (entry - exit_price) * size
+        self.realized_pnl += pnl
+        log.info(f"  💰 Closed {symbol} {pos['side']}: entry=${entry:,.2f} "
+                 f"exit=${exit_price:,.2f} pnl=${pnl:,.2f} (realized total: ${self.realized_pnl:,.2f})")
+
     def _save_and_report(self):
         log.info("\n" + "=" * 60)
         log.info("  SESSION SUMMARY")
@@ -528,6 +593,10 @@ class TradingEngine:
         log.info(f"  Signals generated: {self.signals_generated}")
         log.info(f"  Orders executed:   {len(self.executor.order_log)}")
         log.info(f"  Open positions:    {len(self.risk_mgr.positions)}")
+        log.info(f"  Realized P&L:      ${self.realized_pnl:+.2f}")
+        if self.starting_equity:
+            log.info(f"  Starting equity:   ${self.starting_equity:,.2f}")
+            log.info(f"  Return:            {(self.realized_pnl / self.starting_equity) * 100:+.2f}%")
 
         if self.use_rl and self.rl_agent:
             log.info(f"  RL total steps:    {self.rl_agent.total_steps}")
