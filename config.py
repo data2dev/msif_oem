@@ -3,13 +3,23 @@ MSIF-OEM Configuration
 ======================
 All architecture parameters in one place.
 Matches the paper's Table 3 where applicable, adapted for crypto/Kraken.
+
+API keys are loaded in this priority order:
+  1. Environment variables (KRAKEN_API_KEY, KRAKEN_API_SECRET)
+     → Set by GCP startup script from Secret Manager
+     → Or export locally before running
+  2. Hardcoded values below (for local development only)
 """
+
+import os
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  KRAKEN API
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-API_KEY = ""
-API_SECRET = ""
+# Environment variables take priority (set by GCP Secret Manager)
+# Fall back to hardcoded values for local development
+API_KEY    = os.environ.get("KRAKEN_API_KEY", "")
+API_SECRET = os.environ.get("KRAKEN_API_SECRET", "")
 
 REST_BASE = "https://api.kraken.com"
 WS_PUBLIC = "wss://ws.kraken.com/v2"
