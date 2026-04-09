@@ -112,9 +112,10 @@ class SACAgent:
             action: [action_dim] numpy array in [-1, 1]
         """
         if self.total_steps < self.warmup_steps and not deterministic:
-            return np.random.uniform(-1, 1, self.action_dim).astype(np.float32)
+            return np.random.uniform(0, 1, self.action_dim).astype(np.float32)
 
-        return self.actor.get_action(state, deterministic=deterministic)
+        action = self.actor.get_action(state, deterministic=deterministic)
+        return np.clip(action, 0, 1)
 
     def step(self, state, action, reward, next_state, done) -> int:
         """
@@ -223,7 +224,7 @@ class SACAgent:
             dollar_size = equity * frac
             volume = dollar_size / price
 
-            if abs(weight) < 0.05:  # dead zone — treat as flat
+            if weight < 0.05:  # dead zone — treat as flat
                 targets[sym] = {"side": "flat", "target_size": 0.0, "target_frac": 0.0}
             else:
                 side = "long" if weight > 0 else "short"
