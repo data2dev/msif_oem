@@ -39,8 +39,8 @@ pip install -r requirements.txt -q
 logger -t $LOG_TAG "Python dependencies installed"
 
 # ── Pull Kraken secrets from Secret Manager ──
-export KRAKEN_API_KEY=$(gcloud secrets versions access latest --secret=kraken-api-key)
-export KRAKEN_API_SECRET=$(gcloud secrets versions access latest --secret=kraken-api-secret)
+export KRAKEN_API_KEY=$(gcloud secrets versions access latest --secret=KRAKEN_API_KEY)
+export KRAKEN_API_SECRET=$(gcloud secrets versions access latest --secret=KRAKEN_API_SECRET)
 
 if [ -z "$KRAKEN_API_KEY" ] || [ -z "$KRAKEN_API_SECRET" ]; then
     logger -t $LOG_TAG "ERROR: Failed to retrieve Kraken secrets from Secret Manager"
