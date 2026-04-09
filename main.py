@@ -6,6 +6,9 @@ Automatically handles the full lifecycle:
   2. If missing: runs backfill + training automatically
   3. Starts live/paper trading with RL agent
 
+Order flow: place order → pending → check fills → confirmed → register position
+Positions are NEVER registered until fills are confirmed.
+
 Usage:
     python main.py                    # paper trading (default)
     python main.py --live             # live trading
@@ -49,18 +52,13 @@ log = logging.getLogger("main")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  AUTO-BOOTSTRAP: backfill + train if models don't exist
+#  AUTO-BOOTSTRAP
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def ensure_models_exist(model_dir: str, data_dir: str, backfill_days: int,
                         force_retrain: bool = False):
-    """
-    Check for trained models. If missing (or force_retrain), run
-    backfill and training automatically.
-    """
     ptetfe_path = os.path.join(model_dir, "ptetfe.pt")
     esgd_path = os.path.join(model_dir, "esgd.pkl")
-
     models_exist = os.path.exists(ptetfe_path) and os.path.exists(esgd_path)
 
     if models_exist and not force_retrain:
@@ -72,43 +70,29 @@ def ensure_models_exist(model_dir: str, data_dir: str, backfill_days: int,
     else:
         log.info("No trained models found — running automatic setup")
 
-    # ── Step 1: Check for existing training data ──
     os.makedirs(data_dir, exist_ok=True)
     data_files = glob.glob(os.path.join(data_dir, "*.json"))
 
     if data_files and not force_retrain:
         log.info(f"Found existing data: {len(data_files)} file(s) in {data_dir}")
-        log.info("Skipping backfill, using existing data for training")
     else:
-        # ── Step 2: Run backfill ──
         log.info("=" * 60)
         log.info(f"  BACKFILL: Pulling {backfill_days} days of history")
-        log.info(f"  Estimated time: ~{backfill_days * 2 + 5} minutes")
         log.info("=" * 60)
 
         result = subprocess.run(
-            [sys.executable, "backfill.py",
-             "--days", str(backfill_days),
-             "--dir", data_dir],
+            [sys.executable, "backfill.py", "--days", str(backfill_days), "--dir", data_dir],
             cwd=os.path.dirname(os.path.abspath(__file__)),
         )
         if result.returncode != 0:
-            raise RuntimeError(
-                f"Backfill failed with exit code {result.returncode}. "
-                f"Check your network connection and Kraken API access."
-            )
+            raise RuntimeError(f"Backfill failed with exit code {result.returncode}")
 
-        # Verify data was created
         data_files = glob.glob(os.path.join(data_dir, "*.json"))
         if not data_files:
             raise RuntimeError("Backfill produced no data files")
 
-        log.info(f"Backfill complete: {len(data_files)} data file(s)")
-
-    # ── Step 3: Run training ──
     log.info("=" * 60)
     log.info("  TRAINING: Building PTE-TFE + ESGD models")
-    log.info("  Estimated time: 2-5 minutes")
     log.info("=" * 60)
 
     result = subprocess.run(
@@ -116,12 +100,8 @@ def ensure_models_exist(model_dir: str, data_dir: str, backfill_days: int,
         cwd=os.path.dirname(os.path.abspath(__file__)),
     )
     if result.returncode != 0:
-        raise RuntimeError(
-            f"Training failed with exit code {result.returncode}. "
-            f"Check that you have enough data (need 100+ samples)."
-        )
+        raise RuntimeError(f"Training failed with exit code {result.returncode}")
 
-    # Verify models were created
     if not os.path.exists(ptetfe_path) or not os.path.exists(esgd_path):
         raise RuntimeError("Training completed but model files not found")
 
@@ -219,6 +199,7 @@ class TradingEngine:
         log.info("=" * 60)
         log.info(f"  MSIF-OEM Trading Engine [{mode}] [{rl_mode}]")
         log.info(f"  Pairs: {self.symbols_ordered}")
+        log.info(f"  Mode: LONG-ONLY (spot)")
         log.info(f"  Device: {self.device}")
         log.info("=" * 60)
 
@@ -252,7 +233,7 @@ class TradingEngine:
                 log.error(f"  {ws_sym}: bootstrap failed: {e}")
 
     async def _tick(self):
-        # 1. Poll candles
+        # ── 1. Poll candles ──
         for rest_pair, ws_sym in cfg.PAIRS.items():
             try:
                 candles = api.get_ohlcv(rest_pair, interval=cfg.OHLCV_INTERVAL)
@@ -274,7 +255,14 @@ class TradingEngine:
             except Exception as e:
                 log.error(f"Poll {ws_sym}: {e}")
 
-        # 2. Features → alpha
+        # ── 2. Check fills from previous tick's orders ──
+        fills = self.executor.check_fills()
+        self._process_fills(fills)
+
+        # ── 3. Cancel stale orders ──
+        cancelled = self.executor.cancel_stale_orders()
+
+        # ── 4. Features → alpha ──
         batch = self.pipeline.compute_batch()
         if not batch:
             return
@@ -314,46 +302,49 @@ class TradingEngine:
         if equity <= 0:
             return
 
-        # 3. Execute
+        if self.starting_equity is None:
+            self.starting_equity = equity
+
+        # ── 5. Execute (place orders — fills confirmed next tick) ──
         if self.use_rl:
-            self._rl_execution(signals, symbols, prices, spreads, equity,
-                               features_out)
+            self._rl_execution(signals, symbols, prices, spreads, equity, features_out)
         else:
             self._rule_execution(signals, symbols, prices, equity)
 
-        # 4. ESGD online update
+        # ── 6. ESGD online update ──
         for i, sym in enumerate(symbols):
             bars = self.store.get_bar_features(sym, n_bars=1)
             close = bars[-1].get("close", 0) if bars else 0
             self.pending_labels.append((features_out[i], close, time.time(), sym))
         self._process_delayed_labels()
 
-        # 5. Outcome timeouts
+        # ── 7. Outcome tracker ──
         if self.use_rl and self.outcome_tracker:
             self.outcome_tracker.check_timeouts(prices)
 
+        # ── 8. Log status ──
         if self.bars_processed % 5 == 0:
             pnl = self._compute_pnl(prices)
-            if self.starting_equity is None and equity > 0:
-                self.starting_equity = equity
-            total_return = ((pnl["total"]) / self.starting_equity * 100) if self.starting_equity else 0
+            total_return = (pnl["total"] / self.starting_equity * 100) if self.starting_equity else 0
 
-            # Per-asset P&L string
             asset_pnl = " | ".join(
                 f"{sym.split('/')[0]}:{d['pnl']:+.2f}({d['pnl_pct']:+.1f}%)"
                 for sym, d in pnl["per_asset"].items()
             ) if pnl["per_asset"] else "no positions"
 
+            pending = len(self.executor.pending_orders)
             stats = ""
             if self.use_rl and self.outcome_tracker:
                 os_stats = self.outcome_tracker.get_stats()
-                stats = (f" | RL steps={self.rl_agent.training_steps}"
+                stats = (f" | RL={self.rl_agent.training_steps}"
                          f" | fills={os_stats['total_fills']}"
                          f" | slip={os_stats['avg_slippage_pct']:.3f}%")
+
             log.info(
                 f"Bars={self.bars_processed} | Signals={self.signals_generated}"
                 f" | Pos={len(self.risk_mgr.positions)}"
-                f" | ESGD outliers={self.esgd.outlier_count}/{cfg.C_MAX}"
+                f" | Pending={pending}"
+                f" | ESGD={self.esgd.outlier_count}/{cfg.C_MAX}"
                 f"{stats}"
             )
             log.info(
@@ -362,6 +353,48 @@ class TradingEngine:
                 f"total=${pnl['total']:+.2f} ({total_return:+.2f}%) "
                 f"| {asset_pnl}"
             )
+
+    def _process_fills(self, fills):
+        """Process confirmed fills — register positions, record P&L, feed outcome tracker."""
+        for fill in fills:
+            if fill.is_close:
+                # Closing fill — record P&L
+                if fill.close_position_data:
+                    entry = fill.close_position_data.get("entry_price", 0)
+                    size = fill.close_position_data.get("size", 0)
+                    side = fill.close_position_data.get("side", "long")
+                    if side == "long":
+                        pnl = (fill.price - entry) * size
+                    else:
+                        pnl = (entry - fill.price) * size
+                    self.realized_pnl += pnl
+                    self.risk_mgr.update_pnl(pnl, self.starting_equity or 1)
+                    log.info(f"  💰 Closed {fill.ws_symbol} {side}: "
+                             f"entry=${entry:,.4f} exit=${fill.price:,.4f} "
+                             f"pnl=${pnl:+.4f} (total realized: ${self.realized_pnl:+.2f})")
+                self.risk_mgr.close_position(fill.ws_symbol)
+            else:
+                # Opening fill — register position at ACTUAL fill price
+                direction = "long" if fill.side == "buy" else "short"
+                self.risk_mgr.register_position(
+                    fill.ws_symbol, direction, fill.volume, fill.price
+                )
+                self.signals_generated += 1
+                log.info(f"  📊 Position opened: {fill.ws_symbol} {direction} "
+                         f"{fill.volume:.6f} @ ${fill.price:,.4f} (actual fill)")
+
+            # Feed to outcome tracker
+            if self.use_rl and self.outcome_tracker:
+                actual_fills = {
+                    fill.ws_symbol: {
+                        "price": fill.price,
+                        "volume": fill.volume,
+                        "side": fill.side,
+                        "filled": True,
+                        "was_taker": fill.was_taker,
+                    }
+                }
+                self.outcome_tracker.resolve_fills(actual_fills, {fill.ws_symbol: fill.price})
 
     def _rl_execution(self, signals, symbols, prices, spreads, equity,
                       features_out):
@@ -398,13 +431,20 @@ class TradingEngine:
                 prev_positions=prev_positions, equity=equity,
             )
 
+        # Agent selects action (long-only: clamped to [0, 1])
         action = self.rl_agent.select_action(state)
         targets = self.rl_agent.action_to_positions(
             action, self.symbols_ordered, equity, prices
         )
         targets = self.risk_mgr.validate_rl_targets(targets, equity, prices)
 
+        # Skip symbols with pending unfilled orders
+        pending_symbols = self.executor.get_pending_symbols()
+
         for ws_sym, target in targets.items():
+            if ws_sym in pending_symbols:
+                continue
+
             rest_pair = self._ws_to_rest(ws_sym)
             if not rest_pair or ws_sym not in prices:
                 continue
@@ -412,109 +452,93 @@ class TradingEngine:
             current_price = prices[ws_sym]
             current_pos = self.risk_mgr.get_position(ws_sym)
 
+            # Stop-loss check
             if self.risk_mgr.check_stop_loss(ws_sym, current_price):
                 if current_pos:
-                    self._record_close_pnl(ws_sym, current_price)
-                    self.executor.close_position(
-                        rest_pair, ws_sym, current_pos["side"],
-                        current_pos["size"], current_price
+                    self.executor.place_order(
+                        rest_pair, ws_sym, "sell", current_pos["size"],
+                        current_price, is_close=True,
+                        close_position_data=dict(current_pos),
                     )
-                    self.risk_mgr.close_position(ws_sym)
                 continue
 
+            # Target is flat — close if we have a position
             if target["side"] == "flat":
                 if current_pos:
-                    self._record_close_pnl(ws_sym, current_price)
-                    self.executor.close_position(
-                        rest_pair, ws_sym, current_pos["side"],
-                        current_pos["size"], current_price
+                    self.executor.place_order(
+                        rest_pair, ws_sym, "sell", current_pos["size"],
+                        current_price, is_close=True,
+                        close_position_data=dict(current_pos),
                     )
-                    self.risk_mgr.close_position(ws_sym)
                 continue
 
-            target_size = target["target_size"]
-
-            if not current_pos:
-                if target_size > 0:
-                    sig = {"direction": target["side"],
-                           "strength": abs(target["target_frac"]),
-                           "confidence": 1.0}
-                    result = self.executor.execute_signal(
-                        rest_pair, ws_sym, sig, target_size, current_price
+            # Target is long
+            if target["side"] == "long":
+                if not current_pos:
+                    # Open new long
+                    self.executor.place_order(
+                        rest_pair, ws_sym, "buy", target["target_size"],
+                        current_price, signal=target,
                     )
-                    if result and result.get("status") in ("paper_filled", "submitted"):
-                        self.risk_mgr.register_position(
-                            ws_sym, target["side"], target_size, current_price
-                        )
-                        self.signals_generated += 1
-            else:
-                if target["side"] != current_pos["side"]:
-                    self._record_close_pnl(ws_sym, current_price)
-                    self.executor.close_position(
-                        rest_pair, ws_sym, current_pos["side"],
-                        current_pos["size"], current_price
-                    )
-                    self.risk_mgr.close_position(ws_sym)
-                    if target_size > 0:
-                        sig = {"direction": target["side"],
-                               "strength": abs(target["target_frac"]),
-                               "confidence": 1.0}
-                        result = self.executor.execute_signal(
-                            rest_pair, ws_sym, sig, target_size, current_price
-                        )
-                        if result and result.get("status") in ("paper_filled", "submitted"):
-                            self.risk_mgr.register_position(
-                                ws_sym, target["side"], target_size, current_price
-                            )
-                            self.signals_generated += 1
 
         self.last_state = state.copy()
         self.last_action = action.copy()
         self.last_positions_snapshot = self.risk_mgr.get_positions_snapshot()
 
     def _rule_execution(self, signals, symbols, prices, equity):
+        pending_symbols = self.executor.get_pending_symbols()
+
         for ws_sym, sig in signals.items():
-            if sig["direction"] == "flat":
+            if ws_sym in pending_symbols:
                 continue
+
             rest_pair = self._ws_to_rest(ws_sym)
             if not rest_pair or ws_sym not in prices:
                 continue
+
             current_price = prices[ws_sym]
+            current_pos = self.risk_mgr.get_position(ws_sym)
+
+            # Stop-loss
             if self.risk_mgr.check_stop_loss(ws_sym, current_price):
-                pos = self.risk_mgr.get_position(ws_sym)
-                if pos:
-                    self._record_close_pnl(ws_sym, current_price)
-                    self.executor.close_position(
-                        rest_pair, ws_sym, pos["side"], pos["size"], current_price
+                if current_pos:
+                    self.executor.place_order(
+                        rest_pair, ws_sym, "sell", current_pos["size"],
+                        current_price, is_close=True,
+                        close_position_data=dict(current_pos),
                     )
-                    self.risk_mgr.close_position(ws_sym)
                 continue
-            frac = min(sig["strength"] * sig["confidence"], cfg.MAX_POSITION_FRAC)
-            volume = (equity * frac) / current_price if current_price > 0 else 0
-            if volume <= 0:
-                continue
-            result = self.executor.execute_signal(
-                rest_pair, ws_sym, sig, volume, current_price
-            )
-            if result and result.get("status") in ("paper_filled", "submitted"):
-                self.risk_mgr.register_position(
-                    ws_sym, sig["direction"], volume, current_price
+
+            # Long-only: only act on positive signals
+            if sig["direction"] == "long" and not current_pos:
+                frac = min(sig["strength"] * sig["confidence"], cfg.MAX_POSITION_FRAC)
+                volume = (equity * frac) / current_price if current_price > 0 else 0
+                if volume > 0:
+                    self.executor.place_order(
+                        rest_pair, ws_sym, "buy", volume,
+                        current_price, signal=sig,
+                    )
+            elif sig["direction"] != "long" and current_pos:
+                # Signal turned flat/negative — close
+                self.executor.place_order(
+                    rest_pair, ws_sym, "sell", current_pos["size"],
+                    current_price, is_close=True,
+                    close_position_data=dict(current_pos),
                 )
-                self.signals_generated += 1
 
     def _build_expected_fills(self, action, symbols, prices) -> dict:
         fills = {}
         for i, sym in enumerate(symbols):
             w = float(action[i])
-            if abs(w) < 0.05:
+            if w < 0.05:
                 continue
             price = prices.get(sym, 0)
             if price <= 0:
                 continue
             fills[sym] = {
                 "price": price,
-                "volume": abs(w) * cfg.MAX_POSITION_FRAC,
-                "side": "buy" if w > 0 else "sell",
+                "volume": w * cfg.MAX_POSITION_FRAC,
+                "side": "buy",
             }
         return fills
 
@@ -545,10 +569,8 @@ class TradingEngine:
         return None
 
     def _compute_pnl(self, prices: dict) -> dict:
-        """Compute unrealized P&L from open positions + track realized."""
         unrealized = 0.0
         per_asset = {}
-
         for sym, pos in self.risk_mgr.positions.items():
             price = prices.get(sym, 0)
             if price <= 0:
@@ -571,27 +593,12 @@ class TradingEngine:
             "per_asset": per_asset,
         }
 
-    def _record_close_pnl(self, symbol: str, exit_price: float):
-        """Record realized P&L when a position is closed."""
-        pos = self.risk_mgr.get_position(symbol)
-        if not pos:
-            return
-        entry = pos["entry_price"]
-        size = pos["size"]
-        if pos["side"] == "long":
-            pnl = (exit_price - entry) * size
-        else:
-            pnl = (entry - exit_price) * size
-        self.realized_pnl += pnl
-        log.info(f"  💰 Closed {symbol} {pos['side']}: entry=${entry:,.2f} "
-                 f"exit=${exit_price:,.2f} pnl=${pnl:,.2f} (realized total: ${self.realized_pnl:,.2f})")
-
     def _save_and_report(self):
         log.info("\n" + "=" * 60)
         log.info("  SESSION SUMMARY")
         log.info(f"  Bars processed:    {self.bars_processed}")
         log.info(f"  Signals generated: {self.signals_generated}")
-        log.info(f"  Orders executed:   {len(self.executor.order_log)}")
+        log.info(f"  Orders placed:     {len(self.executor.order_log)}")
         log.info(f"  Open positions:    {len(self.risk_mgr.positions)}")
         log.info(f"  Realized P&L:      ${self.realized_pnl:+.2f}")
         if self.starting_equity:
@@ -631,19 +638,15 @@ def main():
                         help="Force re-backfill and retrain even if models exist")
     args = parser.parse_args()
 
-    # ── Auto-bootstrap: ensure models exist ──
     try:
         ensure_models_exist(
-            model_dir=args.model,
-            data_dir=cfg.DATA_DIR,
-            backfill_days=args.backfill_days,
-            force_retrain=args.retrain,
+            model_dir=args.model, data_dir=cfg.DATA_DIR,
+            backfill_days=args.backfill_days, force_retrain=args.retrain,
         )
     except Exception as e:
         log.error(f"Setup failed: {e}")
         sys.exit(1)
 
-    # ── Start trading ──
     engine = TradingEngine(
         model_dir=args.model,
         paper_trading=not args.live,
@@ -656,7 +659,6 @@ def main():
         engine._stop = True
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
-
     loop.run_until_complete(engine.start())
 
 

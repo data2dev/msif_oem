@@ -99,17 +99,17 @@ class SACAgent:
 
     def select_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
         """
-        Select action given current state.
+        Select action given current state. LONG-ONLY: actions clamped to [0, 1].
         
-        During warmup: random actions in [-1, 1].
-        After warmup: policy network output.
+        During warmup: random actions in [0, 1].
+        After warmup: policy network output, clamped to [0, 1].
         
         Args:
             state: [state_dim] numpy array
             deterministic: if True, use mean action (no exploration)
             
         Returns:
-            action: [action_dim] numpy array in [-1, 1]
+            action: [action_dim] numpy array in [0, 1]
         """
         if self.total_steps < self.warmup_steps and not deterministic:
             return np.random.uniform(0, 1, self.action_dim).astype(np.float32)
@@ -199,10 +199,10 @@ class SACAgent:
     def action_to_positions(self, action: np.ndarray, symbols: list,
                             equity: float, prices: dict) -> dict:
         """
-        Convert agent action to target position sizes.
+        Convert agent action to target position sizes. LONG-ONLY.
         
         Args:
-            action: [n_assets] array in [-1, 1]
+            action: [n_assets] array in [0, 1]
             symbols: ordered list of asset symbols
             equity: current portfolio equity
             prices: {symbol: current_price}
@@ -220,18 +220,17 @@ class SACAgent:
                 continue
 
             # Scale by max position fraction
-            frac = abs(weight) * cfg.MAX_POSITION_FRAC
+            frac = weight * cfg.MAX_POSITION_FRAC
             dollar_size = equity * frac
             volume = dollar_size / price
 
-            if weight < 0.05:  # dead zone — treat as flat
+            if weight < 0.05:  # dead zone — treat as flat (long-only)
                 targets[sym] = {"side": "flat", "target_size": 0.0, "target_frac": 0.0}
             else:
-                side = "long" if weight > 0 else "short"
                 targets[sym] = {
-                    "side": side,
+                    "side": "long",
                     "target_size": volume,
-                    "target_frac": frac * (1 if weight > 0 else -1),
+                    "target_frac": frac,
                 }
 
         return targets
