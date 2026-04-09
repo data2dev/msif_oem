@@ -26,9 +26,9 @@ WS_PUBLIC = "wss://ws.kraken.com/v2"
 
 # Trading pairs (Kraken REST format → WS format)
 PAIRS = {
-    "XXBTZUSD": "BTC/USD",
-    "XETHZUSD": "ETH/USD",
     "SOLUSD":   "SOL/USD",
+    "LINKUSD":  "LINK/USD",
+    "AVAXUSD":  "AVAX/USD",
 }
 PAIR_LIST_REST = list(PAIRS.keys())
 PAIR_LIST_WS = list(PAIRS.values())

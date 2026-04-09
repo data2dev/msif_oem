@@ -29,7 +29,7 @@ log = logging.getLogger("train")
 def load_collected_data(path: str) -> list:
     """Load collected samples from JSON file(s)."""
     if os.path.isdir(path):
-        files = sorted(glob.glob(os.path.join(path, "collected_*.json")))
+        files = sorted(glob.glob(os.path.join(path, "*.json")))
     else:
         files = sorted(glob.glob(path))
 
