@@ -180,7 +180,7 @@ class TradingEngine:
                 action_dim=self.n_assets,
                 hidden_dim=256, lr=3e-4, gamma=0.99, tau=0.005,
                 buffer_capacity=100_000, batch_size=256,
-                warmup_steps=500, device=str(self.device),
+                warmup_steps=100, device=str(self.device),
             )
             self.reward_calc = RewardCalculator()
             self.outcome_tracker = OutcomeTracker(
@@ -336,7 +336,9 @@ class TradingEngine:
             stats = ""
             if self.use_rl and self.outcome_tracker:
                 os_stats = self.outcome_tracker.get_stats()
-                stats = (f" | RL={self.rl_agent.training_steps}"
+                stats = (f" | RL train={self.rl_agent.training_steps}"
+                         f" total={self.rl_agent.total_steps}"
+                         f" buf={len(self.rl_agent.replay_buffer)}"
                          f" | fills={os_stats['total_fills']}"
                          f" | slip={os_stats['avg_slippage_pct']:.3f}%")
 
@@ -420,6 +422,12 @@ class TradingEngine:
             transition_idx = self.rl_agent.step(
                 self.last_state, self.last_action, expected_reward, state, done=False
             )
+            # Debug: log first few steps
+            if self.rl_agent.total_steps <= 3 or self.rl_agent.total_steps % 100 == 0:
+                log.info(f"  RL step() called: total={self.rl_agent.total_steps}, "
+                         f"buf={len(self.rl_agent.replay_buffer)}, "
+                         f"warmup={self.rl_agent.warmup_steps}, "
+                         f"reward={expected_reward:.6f}")
             expected_fills = self._build_expected_fills(
                 self.last_action, self.symbols_ordered, prices
             )

@@ -136,65 +136,86 @@ class SACAgent:
 
     def _train_step(self):
         """One SAC training step."""
-        batch = self.replay_buffer.sample(self.batch_size)
+        try:
+            batch = self.replay_buffer.sample(self.batch_size)
 
-        states = torch.FloatTensor(batch["states"]).to(self.device)
-        actions = torch.FloatTensor(batch["actions"]).to(self.device)
-        rewards = torch.FloatTensor(batch["rewards"]).unsqueeze(1).to(self.device)
-        next_states = torch.FloatTensor(batch["next_states"]).to(self.device)
-        dones = torch.FloatTensor(batch["dones"]).unsqueeze(1).to(self.device)
+            states = torch.FloatTensor(batch["states"]).to(self.device)
+            actions = torch.FloatTensor(batch["actions"]).to(self.device)
+            rewards = torch.FloatTensor(batch["rewards"]).unsqueeze(1).to(self.device)
+            next_states = torch.FloatTensor(batch["next_states"]).to(self.device)
+            dones = torch.FloatTensor(batch["dones"]).unsqueeze(1).to(self.device)
 
-        alpha = self.log_alpha.exp().detach()
+            # Check for NaN in batch
+            if (torch.isnan(states).any() or torch.isnan(actions).any() or
+                    torch.isnan(rewards).any() or torch.isnan(next_states).any()):
+                log.warning(f"NaN detected in batch — skipping training step. "
+                            f"states_nan={torch.isnan(states).sum()}, "
+                            f"actions_nan={torch.isnan(actions).sum()}, "
+                            f"rewards_nan={torch.isnan(rewards).sum()}")
+                self.training_steps += 1  # count it to avoid getting stuck
+                return
 
-        # ── Update Critics ──
-        with torch.no_grad():
-            next_actions, next_log_probs, _ = self.actor(next_states)
-            q1_target, q2_target = self.critic_target(next_states, next_actions)
-            q_target = torch.min(q1_target, q2_target) - alpha * next_log_probs
-            td_target = rewards + (1 - dones) * self.gamma * q_target
+            alpha = self.log_alpha.exp().detach()
 
-        q1, q2 = self.critic(states, actions)
-        critic_loss = F.mse_loss(q1, td_target) + F.mse_loss(q2, td_target)
+            # ── Update Critics ──
+            with torch.no_grad():
+                next_actions, next_log_probs, _ = self.actor(next_states)
+                q1_target, q2_target = self.critic_target(next_states, next_actions)
+                q_target = torch.min(q1_target, q2_target) - alpha * next_log_probs
+                td_target = rewards + (1 - dones) * self.gamma * q_target
 
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
-        self.critic_optimizer.step()
+            q1, q2 = self.critic(states, actions)
+            critic_loss = F.mse_loss(q1, td_target) + F.mse_loss(q2, td_target)
 
-        # ── Update Actor ──
-        new_actions, log_probs, _ = self.actor(states)
-        q1_new = self.critic.q1_forward(states, new_actions)
-        actor_loss = (alpha * log_probs - q1_new).mean()
+            self.critic_optimizer.zero_grad()
+            critic_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
+            self.critic_optimizer.step()
 
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
-        self.actor_optimizer.step()
+            # ── Update Actor ──
+            new_actions, log_probs, _ = self.actor(states)
+            q1_new = self.critic.q1_forward(states, new_actions)
+            actor_loss = (alpha * log_probs - q1_new).mean()
 
-        # ── Update Alpha (entropy temperature) ──
-        alpha_loss = -(self.log_alpha * (log_probs + self.target_entropy).detach()).mean()
+            self.actor_optimizer.zero_grad()
+            actor_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
+            self.actor_optimizer.step()
 
-        self.alpha_optimizer.zero_grad()
-        alpha_loss.backward()
-        self.alpha_optimizer.step()
+            # ── Update Alpha (entropy temperature) ──
+            alpha_loss = -(self.log_alpha * (log_probs + self.target_entropy).detach()).mean()
 
-        # ── Soft update target network ──
-        for target_param, param in zip(self.critic_target.parameters(),
-                                       self.critic.parameters()):
-            target_param.data.copy_(
-                self.tau * param.data + (1 - self.tau) * target_param.data
-            )
+            self.alpha_optimizer.zero_grad()
+            alpha_loss.backward()
+            self.alpha_optimizer.step()
 
-        self.training_steps += 1
+            # ── Soft update target network ──
+            for target_param, param in zip(self.critic_target.parameters(),
+                                           self.critic.parameters()):
+                target_param.data.copy_(
+                    self.tau * param.data + (1 - self.tau) * target_param.data
+                )
 
-        if self.training_steps % 100 == 0:
-            log.info(
-                f"SAC step {self.training_steps}: "
-                f"critic_loss={critic_loss.item():.4f}, "
-                f"actor_loss={actor_loss.item():.4f}, "
-                f"alpha={self.alpha:.4f}, "
-                f"buffer={len(self.replay_buffer)}"
-            )
+            self.training_steps += 1
+
+            if self.training_steps % 100 == 0:
+                log.info(
+                    f"SAC step {self.training_steps}: "
+                    f"critic_loss={critic_loss.item():.4f}, "
+                    f"actor_loss={actor_loss.item():.4f}, "
+                    f"alpha={self.alpha:.4f}, "
+                    f"buffer={len(self.replay_buffer)}"
+                )
+            elif self.training_steps <= 3:
+                log.info(
+                    f"SAC training started! step={self.training_steps}, "
+                    f"critic_loss={critic_loss.item():.4f}, "
+                    f"actor_loss={actor_loss.item():.4f}"
+                )
+
+        except Exception as e:
+            log.error(f"SAC _train_step CRASHED: {e}", exc_info=True)
+            self.training_steps += 1  # don't get stuck retrying the same crash
 
     def action_to_positions(self, action: np.ndarray, symbols: list,
                             equity: float, prices: dict) -> dict:
