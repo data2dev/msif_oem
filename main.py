@@ -318,8 +318,9 @@ class TradingEngine:
             self.pending_labels.append((features_out[i], close, time.time(), sym))
         self._process_delayed_labels()
 
-        # ── 7. Outcome tracker ──
+        # ── 7. Outcome tracker — resolve paper fills immediately ──
         if self.use_rl and self.outcome_tracker:
+            self._resolve_paper_fills(prices)
             self.outcome_tracker.check_timeouts(prices)
 
         # ── 8. Log status ──
@@ -575,6 +576,25 @@ class TradingEngine:
             if ws == ws_sym:
                 return rp
         return None
+
+    def _resolve_paper_fills(self, prices: dict):
+        """In paper mode, immediately resolve pending outcomes since fills are instant."""
+        if not self.executor.paper_trading or not self.outcome_tracker:
+            return
+        if not self.outcome_tracker.pending:
+            return
+
+        for pending in list(self.outcome_tracker.pending):
+            actual_fills = {}
+            for sym, exp in pending.expected_fills.items():
+                actual_fills[sym] = {
+                    "price": exp.get("price", 0),
+                    "volume": exp.get("volume", 0),
+                    "side": exp.get("side", ""),
+                    "filled": True,
+                    "was_taker": False,
+                }
+            self.outcome_tracker.resolve_fills(actual_fills, prices)
 
     def _compute_pnl(self, prices: dict) -> dict:
         unrealized = 0.0
