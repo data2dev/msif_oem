@@ -45,7 +45,7 @@ def fetch_candle_history(pair: str, days: int) -> list:
     Fetch N days of 1-minute candles via REST pagination.
     
     Kraken OHLC endpoint returns ~720 bars per call.
-    We paginate backwards using the 'since' parameter.
+    Uses the 'last' field from the response for proper pagination.
     
     Returns list of [ts, o, h, l, c, vwap, vol, count].
     """
@@ -61,32 +61,47 @@ def fetch_candle_history(pair: str, days: int) -> list:
     calls = 0
     while current_since < end_ts:
         try:
-            result = api.public("OHLC", {
-                "pair": pair,
-                "interval": 1,
-                "since": current_since,
-            })
+            # Raw API call to get the 'last' pagination token
+            import requests
+            url = f"{cfg.REST_BASE}/0/public/OHLC"
+            resp = requests.get(url, params={
+                "pair": pair, "interval": 1, "since": current_since,
+            }, timeout=10)
+            resp.raise_for_status()
+            body = resp.json()
+
+            if body.get("error"):
+                log.error(f"    Kraken error: {body['error']}")
+                break
+
+            result = body["result"]
             key = [k for k in result if k != "last"][0]
             candles = result[key]
+            pagination_last = int(result.get("last", 0))
 
             if not candles:
                 break
 
-            # Filter to only completed bars within our range
+            # Filter to only bars within our range
             new_bars = [c for c in candles if start_ts <= c[0] <= end_ts]
             all_candles.extend(new_bars)
 
-            # Advance past the last candle we received
-            last_ts = candles[-1][0]
-            if last_ts <= current_since:
-                # No progress — we've hit the end
-                break
-            current_since = last_ts + 1
-
             calls += 1
-            if calls % 10 == 0:
+            last_candle_ts = candles[-1][0]
+
+            if calls % 5 == 0:
                 log.info(f"    {len(all_candles)} bars fetched "
-                         f"(up to {time.strftime('%Y-%m-%d %H:%M', time.localtime(last_ts))})")
+                         f"(up to {time.strftime('%Y-%m-%d %H:%M', time.localtime(last_candle_ts))})")
+
+            # Use Kraken's pagination token, NOT the last candle timestamp
+            if pagination_last <= current_since:
+                # No progress — hit the end
+                break
+            current_since = pagination_last
+
+            # Stop if we've reached current time
+            if last_candle_ts >= end_ts - 120:
+                break
 
             time.sleep(RATE_LIMIT_DELAY)
 

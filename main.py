@@ -471,9 +471,9 @@ class TradingEngine:
                     )
                 continue
 
-            # Target is flat — close if we have a position
+            # Target is flat — close if we have a position AND held long enough
             if target["side"] == "flat":
-                if current_pos:
+                if current_pos and self.risk_mgr.can_close(ws_sym):
                     self.executor.place_order(
                         rest_pair, ws_sym, "sell", current_pos["size"],
                         current_price, is_close=True,
@@ -528,12 +528,13 @@ class TradingEngine:
                         current_price, signal=sig,
                     )
             elif sig["direction"] != "long" and current_pos:
-                # Signal turned flat/negative — close
-                self.executor.place_order(
-                    rest_pair, ws_sym, "sell", current_pos["size"],
-                    current_price, is_close=True,
-                    close_position_data=dict(current_pos),
-                )
+                # Signal turned flat/negative — close if held long enough
+                if self.risk_mgr.can_close(ws_sym):
+                    self.executor.place_order(
+                        rest_pair, ws_sym, "sell", current_pos["size"],
+                        current_price, is_close=True,
+                        close_position_data=dict(current_pos),
+                    )
 
     def _build_expected_fills(self, action, symbols, prices) -> dict:
         fills = {}

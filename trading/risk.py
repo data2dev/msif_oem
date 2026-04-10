@@ -83,6 +83,18 @@ class RiskManager:
             return True
         return False
 
+    def can_close(self, symbol: str) -> bool:
+        """Check if a position has been held long enough to close.
+        Stop-loss bypasses this — use check_stop_loss separately."""
+        if symbol not in self.positions:
+            return True
+        pos = self.positions[symbol]
+        held_seconds = time.time() - pos.get("entry_time", 0)
+        min_seconds = cfg.MIN_HOLD_MINUTES * 60
+        if held_seconds < min_seconds:
+            return False
+        return True
+
     def update_pnl(self, realized_pnl: float, equity: float):
         today = time.strftime("%Y-%m-%d")
         if today != self.last_reset_day:

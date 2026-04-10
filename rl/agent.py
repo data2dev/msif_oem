@@ -245,7 +245,7 @@ class SACAgent:
             dollar_size = equity * frac
             volume = dollar_size / price
 
-            if weight < 0.05:  # dead zone — treat as flat (long-only)
+            if weight < 0.15:  # wide dead zone — only trade on strong conviction
                 targets[sym] = {"side": "flat", "target_size": 0.0, "target_frac": 0.0}
             else:
                 targets[sym] = {

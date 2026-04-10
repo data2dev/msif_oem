@@ -91,11 +91,12 @@ C_MAX = 10                   # outlier count to trigger re-cluster
 #  PREDICTION & TRADING
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FORWARD_BARS = 30            # prediction target: 30-min forward return
-MIN_SIGNAL_THRESHOLD = 0.001 # minimum alpha to trade
+MIN_SIGNAL_THRESHOLD = 0.005 # minimum alpha to trade (was 0.001 — need stronger signal)
 MAX_POSITION_FRAC = 0.20     # max 20% of portfolio per asset
 STOP_LOSS_PCT = 0.02         # 2% per-position stop
 DAILY_DRAWDOWN_LIMIT = 0.05  # 5% daily max drawdown
 ORDER_TYPE = "limit"         # limit orders to avoid taker fees
+MIN_HOLD_MINUTES = 5         # minimum minutes before a position can be closed
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  PATHS
