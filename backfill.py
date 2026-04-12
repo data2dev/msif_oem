@@ -45,27 +45,31 @@ def fetch_candle_history(pair: str, days: int) -> list:
     Fetch N days of 1-minute candles via REST pagination.
     
     Kraken OHLC endpoint returns ~720 bars per call.
-    Uses the 'last' field from the response for proper pagination.
+    The 'last' field is a NANOSECOND timestamp used as the pagination cursor.
+    The 'since' parameter accepts both seconds and nanoseconds.
+    We track progress using candle timestamps (seconds) but pass
+    Kraken's 'last' token directly as the next 'since' value.
     
     Returns list of [ts, o, h, l, c, vwap, vol, count].
     """
     all_candles = []
     end_ts = int(time.time())
     start_ts = end_ts - (days * 86400)
-    current_since = start_ts
+    current_since = start_ts  # first call uses seconds
 
     log.info(f"  Fetching {days} days of 1m candles for {pair}")
     log.info(f"  From: {time.strftime('%Y-%m-%d %H:%M', time.localtime(start_ts))}")
     log.info(f"  To:   {time.strftime('%Y-%m-%d %H:%M', time.localtime(end_ts))}")
 
     calls = 0
-    while current_since < end_ts:
+    last_candle_ts = start_ts  # track progress in seconds
+
+    while last_candle_ts < end_ts - 120:
         try:
-            # Raw API call to get the 'last' pagination token
             import requests
             url = f"{cfg.REST_BASE}/0/public/OHLC"
             resp = requests.get(url, params={
-                "pair": pair, "interval": 1, "since": current_since,
+                "pair": pair, "interval": cfg.OHLCV_INTERVAL, "since": current_since,
             }, timeout=10)
             resp.raise_for_status()
             body = resp.json()
@@ -77,7 +81,7 @@ def fetch_candle_history(pair: str, days: int) -> list:
             result = body["result"]
             key = [k for k in result if k != "last"][0]
             candles = result[key]
-            pagination_last = int(result.get("last", 0))
+            pagination_last = result.get("last", 0)  # nanosecond token
 
             if not candles:
                 break
@@ -86,22 +90,21 @@ def fetch_candle_history(pair: str, days: int) -> list:
             new_bars = [c for c in candles if start_ts <= c[0] <= end_ts]
             all_candles.extend(new_bars)
 
-            calls += 1
-            last_candle_ts = candles[-1][0]
-
-            if calls % 5 == 0:
-                log.info(f"    {len(all_candles)} bars fetched "
-                         f"(up to {time.strftime('%Y-%m-%d %H:%M', time.localtime(last_candle_ts))})")
-
-            # Use Kraken's pagination token, NOT the last candle timestamp
-            if pagination_last <= current_since:
-                # No progress — hit the end
+            # Track progress using actual candle timestamps (seconds)
+            new_last_ts = candles[-1][0]
+            if new_last_ts <= last_candle_ts:
+                # No progress
                 break
+            last_candle_ts = new_last_ts
+
+            # Use Kraken's nanosecond token for next call
             current_since = pagination_last
 
-            # Stop if we've reached current time
-            if last_candle_ts >= end_ts - 120:
-                break
+            calls += 1
+            if calls % 5 == 0:
+                pct = (last_candle_ts - start_ts) / max(end_ts - start_ts, 1) * 100
+                log.info(f"    {len(all_candles)} bars fetched ({pct:.0f}% done, "
+                         f"up to {time.strftime('%Y-%m-%d %H:%M', time.localtime(last_candle_ts))})")
 
             time.sleep(RATE_LIMIT_DELAY)
 
@@ -130,13 +133,14 @@ def fetch_trade_history(pair: str, days: int) -> dict:
     For high-volume pairs, this may only cover a few minutes.
     We paginate to get as much as feasible within rate limits.
     
-    Returns: {minute_ts: [trades]} dict
+    Returns: {bar_ts: [trades]} dict, bucketed by bar interval.
     """
     log.info(f"  Fetching trade history for {pair} (last {days} days)")
 
     trade_buckets = {}
     end_ts = int(time.time())
     start_ts = end_ts - (days * 86400)
+    bar_seconds = cfg.OHLCV_INTERVAL * 60  # bucket size in seconds
 
     # Kraken trade 'since' uses nanosecond timestamps
     current_since = start_ts * 1_000_000_000
@@ -160,11 +164,11 @@ def fetch_trade_history(pair: str, days: int) -> dict:
             for t in trades:
                 price, vol, ts, side, otype, misc = t[:6]
                 ts_sec = int(float(ts))
-                minute_ts = ts_sec - (ts_sec % 60)
+                bar_ts = ts_sec - (ts_sec % bar_seconds)
 
-                if minute_ts not in trade_buckets:
-                    trade_buckets[minute_ts] = []
-                trade_buckets[minute_ts].append({
+                if bar_ts not in trade_buckets:
+                    trade_buckets[bar_ts] = []
+                trade_buckets[bar_ts].append({
                     "price": float(price),
                     "vol": float(vol),
                     "side": side,
@@ -186,8 +190,7 @@ def fetch_trade_history(pair: str, days: int) -> dict:
 
             calls += 1
             if calls % 20 == 0:
-                covered_min = len(trade_buckets)
-                log.info(f"    {covered_min} minute-buckets covered, {calls} API calls")
+                log.info(f"    {len(trade_buckets)} bar-buckets covered, {calls} API calls")
 
             time.sleep(RATE_LIMIT_DELAY)
 
@@ -195,7 +198,7 @@ def fetch_trade_history(pair: str, days: int) -> dict:
             log.error(f"    Trade fetch error: {e}. Retrying...")
             time.sleep(5)
 
-    log.info(f"  Trade data: {len(trade_buckets)} minute-buckets from {calls} calls")
+    log.info(f"  Trade data: {len(trade_buckets)} bar-buckets from {calls} calls")
     return trade_buckets
 
 
@@ -211,8 +214,9 @@ def build_bar_data(candles: list, trade_buckets: dict) -> list:
         o, h, l, close = float(c[1]), float(c[2]), float(c[3]), float(c[4])
         vwap, vol, count = float(c[5]), float(c[6]), int(c[7])
 
-        minute_ts = ts - (ts % 60)
-        bucket_trades = trade_buckets.get(minute_ts, [])
+        bar_seconds = cfg.OHLCV_INTERVAL * 60
+        bar_ts = ts - (ts % bar_seconds)
+        bucket_trades = trade_buckets.get(bar_ts, [])
 
         buy_vol = sum(t["vol"] for t in bucket_trades if t["side"] == "b")
         sell_vol = sum(t["vol"] for t in bucket_trades if t["side"] == "s")

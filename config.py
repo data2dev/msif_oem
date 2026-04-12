@@ -36,9 +36,9 @@ PAIR_LIST_WS = list(PAIRS.values())
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  DATA INGESTION (Stage 1)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OHLCV_INTERVAL = 1           # minutes
+OHLCV_INTERVAL = 60          # hourly bars
 BOOK_DEPTH = 25              # order book levels
-CANDLE_HISTORY_BARS = 720    # 12 hours of 1-min bars for initial load
+CANDLE_HISTORY_BARS = 720    # 720 hourly bars = 30 days
 
 # Anti-spoof OBI slicing
 OBI_NEAR_LEVELS = (0, 3)     # levels 1-3
@@ -48,8 +48,8 @@ OBI_DEEP_LEVELS = (10, 25)   # levels 11-25
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  FEATURE ENGINEERING (Stage 2)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-LOOKBACK_BARS = 30           # rolling window for time series input
-MULTIBAR_WINDOWS = [5, 10, 20, 60]  # lookback periods for multi-bar factors
+LOOKBACK_BARS = 24           # 24-hour rolling window
+MULTIBAR_WINDOWS = [3, 6, 12, 24]  # 3h, 6h, 12h, 24h lookbacks
 
 # Feature category dimensions (approximate, exact set in each module)
 N_OHLCV_FEATURES = 5
@@ -90,13 +90,13 @@ C_MAX = 10                   # outlier count to trigger re-cluster
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  PREDICTION & TRADING
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FORWARD_BARS = 30            # prediction target: 30-min forward return
-MIN_SIGNAL_THRESHOLD = 0.005 # minimum alpha to trade (was 0.001 — need stronger signal)
+FORWARD_BARS = 1             # predict next 1 hour
+MIN_SIGNAL_THRESHOLD = 0.005 # minimum alpha to trade (0.5% predicted move)
 MAX_POSITION_FRAC = 0.20     # max 20% of portfolio per asset
 STOP_LOSS_PCT = 0.02         # 2% per-position stop
 DAILY_DRAWDOWN_LIMIT = 0.05  # 5% daily max drawdown
 ORDER_TYPE = "limit"         # limit orders to avoid taker fees
-MIN_HOLD_MINUTES = 5         # minimum minutes before a position can be closed
+MIN_HOLD_MINUTES = 30        # hold at least 30 min (half an hour bar)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  PATHS

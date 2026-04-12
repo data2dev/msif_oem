@@ -554,7 +554,7 @@ class TradingEngine:
 
     def _process_delayed_labels(self):
         now = time.time()
-        label_delay = cfg.FORWARD_BARS * 60
+        label_delay = cfg.FORWARD_BARS * cfg.OHLCV_INTERVAL * 60  # seconds
         ready, remaining = [], []
         for feat, close_then, ts, sym in self.pending_labels:
             if now - ts >= label_delay:
@@ -661,8 +661,8 @@ def main():
     parser.add_argument("--live", action="store_true", help="Enable live trading")
     parser.add_argument("--no-rl", action="store_true", help="Disable RL agent")
     parser.add_argument("--model", type=str, default=cfg.MODEL_DIR, help="Model dir")
-    parser.add_argument("--backfill-days", type=int, default=7,
-                        help="Days of history for initial backfill (default: 7)")
+    parser.add_argument("--backfill-days", type=int, default=30,
+                        help="Days of history for initial backfill (default: 30)")
     parser.add_argument("--retrain", action="store_true",
                         help="Force re-backfill and retrain even if models exist")
     args = parser.parse_args()
