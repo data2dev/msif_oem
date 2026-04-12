@@ -48,7 +48,7 @@ OBI_DEEP_LEVELS = (10, 25)   # levels 11-25
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  FEATURE ENGINEERING (Stage 2)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-LOOKBACK_BARS = 24           # 24-hour rolling window
+LOOKBACK_BARS = 12           # 12-hour rolling window (starts faster)
 MULTIBAR_WINDOWS = [3, 6, 12, 24]  # 3h, 6h, 12h, 24h lookbacks
 
 # Feature category dimensions (approximate, exact set in each module)

@@ -223,12 +223,41 @@ class TradingEngine:
             self._save_and_report()
 
     async def _bootstrap(self):
-        log.info("Bootstrapping candle history...")
+        log.info("Bootstrapping candle history + bar features...")
         for rest_pair, ws_sym in cfg.PAIRS.items():
             try:
                 candles = api.get_ohlcv(rest_pair, interval=cfg.OHLCV_INTERVAL)
-                self.store.load_candles(ws_sym, candles[:-1])
-                log.info(f"  {ws_sym}: {len(candles)-1} bars loaded")
+                completed = candles[:-1]  # exclude forming bar
+                self.store.load_candles(ws_sym, completed)
+
+                # Also pre-populate bar_features from historical candles
+                # so the feature pipeline can start immediately
+                state = self.store.symbols[ws_sym]
+                for c in completed:
+                    o, h, l, close = float(c[1]), float(c[2]), float(c[3]), float(c[4])
+                    vol = float(c[6])
+                    mid = (h + l) / 2
+                    spread_est = max((h - l) * 0.1, close * 0.0001)
+
+                    # Synthetic book from price range (same as backfill)
+                    bids = [(mid - spread_est * (0.5 + j * 0.5), max(vol * 0.1 / (1 + j * 0.3), 0.001))
+                            for j in range(cfg.BOOK_DEPTH)]
+                    asks = [(mid + spread_est * (0.5 + j * 0.5), max(vol * 0.1 / (1 + j * 0.3), 0.001))
+                            for j in range(cfg.BOOK_DEPTH)]
+
+                    bar_data = {
+                        "ts": int(c[0]), "open": o, "high": h, "low": l,
+                        "close": close, "vwap": float(c[5]), "volume": vol,
+                        "count": int(c[7]),
+                        "bids": bids, "asks": asks,
+                        "trades": [], "n_trades": int(c[7]),
+                        "buy_vol": vol * 0.5, "sell_vol": vol * 0.5,
+                        "ofi_additions": max(int(int(c[7]) * 0.6), 1),
+                        "ofi_cancels": max(int(int(c[7]) * 0.3), 1),
+                    }
+                    state.bar_features.append(bar_data)
+
+                log.info(f"  {ws_sym}: {len(completed)} candles + bar_features loaded")
             except Exception as e:
                 log.error(f"  {ws_sym}: bootstrap failed: {e}")
 
@@ -265,6 +294,16 @@ class TradingEngine:
         # ── 4. Features → alpha ──
         batch = self.pipeline.compute_batch()
         if not batch:
+            # Log progress even when features aren't ready yet
+            if self.bars_processed % 3 == 0 and self.bars_processed > 0:
+                bar_counts = {}
+                for ws_sym in cfg.PAIR_LIST_WS:
+                    n = len(self.store.get_bar_features(ws_sym))
+                    bar_counts[ws_sym.split("/")[0]] = n
+                counts_str = " ".join(f"{k}={v}" for k, v in bar_counts.items())
+                log.info(f"Waiting for data: bars={self.bars_processed} | "
+                         f"bar_features: {counts_str} | "
+                         f"need {cfg.LOOKBACK_BARS} per asset to start")
             return
 
         ta, tb, tc, td, symbols = self.pipeline.features_to_tensors(batch)
