@@ -43,7 +43,7 @@ class BranchEncoder(nn.Module):
     def __init__(self, input_dim: int):
         super().__init__()
         self.embed = nn.Linear(input_dim, cfg.EMBED_DIM)
-        self.pos_enc = PositionalEncoding(cfg.EMBED_DIM, max_len=cfg.LOOKBACK_BARS + 10)
+        self.pos_enc = PositionalEncoding(cfg.EMBED_DIM, max_len=200)
         self.dropout = nn.Dropout(cfg.DROPOUT)
 
         encoder_layer = nn.TransformerEncoderLayer(
