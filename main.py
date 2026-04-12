@@ -179,7 +179,7 @@ class TradingEngine:
                 state_dim=self.state_builder.state_dim,
                 action_dim=self.n_assets,
                 hidden_dim=256, lr=3e-4, gamma=0.99, tau=0.005,
-                buffer_capacity=100_000, batch_size=256,
+                buffer_capacity=100_000, batch_size=64,
                 warmup_steps=100, device=str(self.device),
             )
             self.reward_calc = RewardCalculator()

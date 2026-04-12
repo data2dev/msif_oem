@@ -76,22 +76,23 @@ class StateBuilder:
             offset = i * self.n_per_asset
             sig = signals.get(sym, {})
 
-            # Alpha signal and confidence
-            state[offset + 0] = sig.get("raw_alpha", 0.0)
-            state[offset + 1] = sig.get("confidence", 0.0)
+            # Alpha signal — clamp to [-1, 1] (raw can be enormous from ESGD)
+            raw_alpha = sig.get("raw_alpha", 0.0)
+            state[offset + 0] = np.clip(np.tanh(raw_alpha * 100), -1.0, 1.0)
+
+            # Confidence — already 0-1 range
+            state[offset + 1] = np.clip(sig.get("confidence", 0.0), 0.0, 1.0)
 
             # Position state
             pos = risk_mgr.get_position(sym)
             if pos and equity > 0:
                 pos_value = pos["size"] * pos.get("entry_price", 0)
                 sign = 1.0 if pos["side"] == "long" else -1.0
-                state[offset + 2] = sign * pos_value / equity
+                state[offset + 2] = np.clip(sign * pos_value / equity, -1.0, 1.0)
 
-                # Unrealized P&L
+                # Unrealized P&L — clamp
                 entry = pos["entry_price"]
-                # We don't have current price here, so use alpha as proxy
-                # The actual P&L gets corrected by outcome tracker
-                state[offset + 3] = sig.get("raw_alpha", 0.0) * sign
+                state[offset + 3] = np.clip(sig.get("raw_alpha", 0.0) * sign, -1.0, 1.0)
 
                 # Time held (normalized: 0=just opened, 1=held for 60 mins)
                 elapsed = (time.time() - pos.get("entry_time", time.time())) / 3600
@@ -148,6 +149,10 @@ class StateBuilder:
         hour = time.gmtime().tm_hour + time.gmtime().tm_min / 60.0
         state[g_offset + 4 + cfg.N_CLUSTERS] = math.sin(2 * math.pi * hour / 24)
         state[g_offset + 5 + cfg.N_CLUSTERS] = math.cos(2 * math.pi * hour / 24)
+
+        # Final safety: clamp entire state to [-5, 5] to prevent RL divergence
+        state = np.clip(state, -5.0, 5.0)
+        state = np.nan_to_num(state, nan=0.0, posinf=5.0, neginf=-5.0)
 
         return state
 

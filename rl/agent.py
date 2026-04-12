@@ -124,6 +124,8 @@ class SACAgent:
         Returns:
             transition index in replay buffer
         """
+        # Clamp reward to prevent divergence
+        reward = float(np.clip(reward, -1.0, 1.0))
         idx = self.replay_buffer.push(state, action, reward, next_state, done)
         self.total_steps += 1
 

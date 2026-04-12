@@ -20,6 +20,7 @@ Reward components:
 """
 
 import numpy as np
+import numpy as np
 import config as cfg
 
 
@@ -117,7 +118,8 @@ class RewardCalculator:
         if equity > 0:
             reward /= equity
 
-        return reward
+        # Clamp to prevent RL divergence from extreme values
+        return float(np.clip(reward, -1.0, 1.0))
 
     def compute_actual(self, expected_reward: float, expected_fills: dict,
                        actual_fills: dict, prices: dict, equity: float) -> float:
@@ -175,7 +177,7 @@ class RewardCalculator:
         if equity > 0:
             correction /= equity
 
-        return expected_reward + correction
+        return float(np.clip(expected_reward + correction, -1.0, 1.0))
 
     def update_fee_rates(self, taker: float, maker: float):
         """Update fee rates when they change (volume tier changes on Kraken)."""
