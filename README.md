@@ -27,8 +27,8 @@ data across 5,000+ stocks. This codebase adapts that framework with these change
 | Aspect | Original Paper | This Implementation |
 |--------|---------------|---------------------|
 | Market | China A-shares (regulated) | Crypto on Kraken (unregulated) |
-| Frequency | Daily bars, 10-day labels | 1-minute bars, 30-minute labels |
-| Universe | 5,000+ stocks | 3 pairs: BTC/USD, ETH/USD, SOL/USD |
+| Frequency | Daily bars, 10-day labels | 1-hr bars, 30-minute labels |
+| Universe | 5,000+ stocks | 3 pairs: SOL/USD, AVAX/USD, LINK/USD |
 | Data sources | Wind terminal, DolphinDB | Kraken REST + WebSocket APIs |
 | Anti-spoofing | Not needed (regulated) | VW-OBI, Multi-level OBI, OFI |
 | Execution | Not addressed | SAC reinforcement learning agent |
