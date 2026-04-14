@@ -11,6 +11,8 @@ reinforcement learning agent that optimizes for real-world execution quality
 The system is adapted from an academic paper on equity alpha factor synthesis,
 with significant modifications for the unregulated crypto environment.
 
+Note: initially this was implemented as a minute-level candle-stick data-driven project, later it was commited to an hour (the commits are not available here, as the development of the project is kept private), which is why some description of this readme might mention minute-level data, as it was originally written in reference to an earlier version of the project.
+
 ---
 
 ## Origin and Adaptation
