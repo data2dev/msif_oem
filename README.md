@@ -3,7 +3,7 @@
 ## What This Is
 
 A complete algorithmic cryptocurrency trading system for the Kraken exchange,
-operating at 1-minute bar frequency. It predicts short-term price movements
+operating at 1-hr bar frequency. It predicts short-term price movements
 using a multi-source data fusion approach, then executes trades through a
 reinforcement learning agent that optimizes for real-world execution quality
 (accounting for slippage, partial fills, and fee structure).
