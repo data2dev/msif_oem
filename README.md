@@ -2,18 +2,21 @@
 
 ## What This Is
 
-A complete algorithmic cryptocurrency trading system for the Kraken exchange,
-operating at 1-hr bar frequency. It predicts short-term price movements
-using a multi-source data fusion approach, then executes trades through a
-reinforcement learning agent that optimizes for real-world execution quality
-(accounting for slippage, partial fills, and fee structure).
+This project implements an end-to-end quantitative trading framework—adapted from the MSIF-OEM (Multisource Information Fusion and Online Ensemble Modeling) research—designed to solve the challenges of alpha generation and execution quality in high-volatility, non-regulated cryptocurrency markets.
 
-The system is adapted from an academic paper on equity alpha factor synthesis,
-with significant modifications for the unregulated crypto environment.
-
-Note: initially this was implemented as a minute-level candle-stick data-driven project, later it was commited to an hour (the commits are not available here, as the development of the project is kept private), which is why some description of this readme might mention minute-level data, as it was originally written in reference to an earlier version of the project.
+The system addresses the non-stationary nature of financial time-series data through a modular, multi-stage machine learning pipeline. It is built to optimize the end-to-end flow from noisy raw market data to refined portfolio execution, treating market microstructure as a signal rather than noise.
 
 ---
+## Core Technical Contributions
+Multi-Source Data Fusion: Engineered a pipeline that ingests four distinct high-frequency data streams (OHLCV, L2 Order Book, Tick-Trade Data, and Funding Rates).
+
+**Temporal Feature Extraction (PTE-TFE)**: Deployed a custom architecture consisting of four parallel Transformer Encoders. This design captures specialized temporal attention patterns for different data modalities, fusing them into a 64-dimensional orthogonal feature space optimized for downstream linear prediction.
+
+**Online Ensemble Modeling (ESGD)**: Implemented a dynamic regime-switching model using K-means clustering and a suite of online SGD linear regressors. This approach allows the model to adapt to changing market regimes (e.g., trending vs. range-bound) in real-time without the computational overhead of frequent full-model retraining.
+
+**RL-Driven Execution (SAC)**: Developed a Soft Actor-Critic (SAC) reinforcement learning agent to solve the sequential decision-making problem of portfolio optimization. The agent balances alpha signals against execution costs (slippage, fees, and liquidity constraints) using a proprietary "Outcome Correction" loop to reconcile theoretical expectations with real-world fill feedback.
+
+**Robustness & Anti-Spoofing**: Built a sophisticated microstructure defense suite (VW-OBI, Multi-level OBI, and OFI) to mitigate the effects of manipulative, high-frequency "spoof" orders prevalent in unregulated crypto markets.
 
 ## Origin and Adaptation
 
@@ -35,6 +38,8 @@ data across 5,000+ stocks. This codebase adapts that framework with these change
 | Anti-spoofing | Not needed (regulated) | VW-OBI, Multi-level OBI, OFI |
 | Execution | Not addressed | SAC reinforcement learning agent |
 | Unique signals | N/A | Funding rate (crypto-native) |
+
+Note: initially this was implemented as a minute-level candle-stick data-driven project, later it was commited to an hour (the commits are not available here, as the development of the project is kept private), which is why some description of this readme might mention minute-level data, as it was originally written in reference to an earlier version of the project.
 
 **Companion document:** An "OBI note" on Order Book Imbalance spoofing defenses.
 It explains why raw OBI is dangerous in crypto (whales place fake orders to
